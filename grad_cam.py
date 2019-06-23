@@ -30,14 +30,19 @@ class _BaseWrapper(object):
         one_hot.scatter_(1, ids, 1.0)
         return one_hot
 
-    def forward(self, image):
+    def forward(self, image, layers=None):
         """
         Simple classification
         """
         self.model.zero_grad()
-        self.logits = self.model(image)
-        self.probs = F.softmax(self.logits, dim=1)
-        return self.probs.sort(dim=1, descending=True)
+        if layers is None:
+            self.logits = self.model(image)
+            self.probs = F.softmax(self.logits, dim=1)
+            result = self.probs.sort(dim=1, descending=True)
+        else:
+            self.logits = self.model(image, layers)
+            result = self.logits
+        return result
 
     def backward(self, ids):
         """
@@ -63,9 +68,9 @@ class _BaseWrapper(object):
 
 
 class BackPropagation(_BaseWrapper):
-    def forward(self, image):
+    def forward(self, image, layers=None):
         self.image = image.requires_grad_()
-        return super(BackPropagation, self).forward(self.image)
+        return super(BackPropagation, self).forward(self.image, layers=layers)
 
     def generate(self):
         gradient = self.image.grad.clone()
@@ -90,7 +95,6 @@ class GuidedBackPropagation(BackPropagation):
 
         for module in self.model.named_modules():
             self.handlers.append(module[1].register_backward_hook(backward_hook))
-
 
 class Deconvnet(BackPropagation):
     """
@@ -127,7 +131,11 @@ class GradCAM(_BaseWrapper):
         def forward_hook(key):
             def forward_hook_(module, input, output):
                 # Save featuremaps
-                self.fmap_pool[key] = output.detach()
+                if isinstance(output, dict):
+                    ls = input[1]
+                    self.fmap_pool[key] = output[ls[0]].detach()
+                else:
+                    self.fmap_pool[key] = output.detach()
 
             return forward_hook_
 
@@ -153,9 +161,9 @@ class GradCAM(_BaseWrapper):
     def _compute_grad_weights(self, grads):
         return F.adaptive_avg_pool2d(grads, 1)
 
-    def forward(self, image):
+    def forward(self, image, layers=None):
         self.image_shape = image.shape[2:]
-        return super(GradCAM, self).forward(image)
+        return super(GradCAM, self).forward(image, layers)
 
     def generate(self, target_layer):
         fmaps = self._find(self.fmap_pool, target_layer)
