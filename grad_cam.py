@@ -24,6 +24,14 @@ class _BaseWrapper(object):
         self.device = next(model.parameters()).device
         self.model = model
         self.handlers = []  # a set of hook function handlers
+        self.logits = None
+
+    def remove(self):
+        self.remove_hook()
+        del self.device
+        del self.model
+        del self.logits
+        torch.cuda.empty_cache()
 
     def _encode_one_hot(self, ids):
         one_hot = torch.zeros_like(self.logits).to(self.device)
@@ -68,6 +76,10 @@ class _BaseWrapper(object):
 
 
 class BackPropagation(_BaseWrapper):
+    # def __del__(self):
+    #     del self.image
+    #     super(BackPropagation, self).__del__()
+
     def forward(self, image, layers=None):
         self.image = image.requires_grad_()
         return super(BackPropagation, self).forward(self.image, layers=layers)
@@ -76,6 +88,7 @@ class BackPropagation(_BaseWrapper):
         gradient = self.image.grad.clone()
         self.image.grad.zero_()
         return gradient
+
 
 
 class GuidedBackPropagation(BackPropagation):
@@ -151,6 +164,13 @@ class GradCAM(_BaseWrapper):
             if self.candidate_layers is None or name in self.candidate_layers:
                 self.handlers.append(module.register_forward_hook(forward_hook(name)))
                 self.handlers.append(module.register_backward_hook(backward_hook(name)))
+
+    def remove(self):
+        del self.fmap_pool
+        del self.grad_pool
+        del self.candidate_layers
+        super(GradCAM, self).remove()
+
 
     def _find(self, pool, target_layer):
         if target_layer in pool.keys():
