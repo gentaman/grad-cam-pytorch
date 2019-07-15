@@ -10,6 +10,12 @@ PyTorch implementation of Grad-CAM (Gradient-weighted Class Activation Mapping) 
 * opencv
 * tqdm
 
+## How to install to your environment
+
+```sh
+(your_env)$ python setup.py install
+```
+
 ## Basic usage
 
 ```sh
