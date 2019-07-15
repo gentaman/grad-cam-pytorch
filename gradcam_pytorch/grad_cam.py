@@ -1,9 +1,31 @@
-#!/usr/bin/env python
-# coding: utf-8
-#
-# Author:   Kazuto Nakashima
-# URL:      http://kazuto1011.github.io
-# Created:  2017-05-26
+# Author:   gentaman
+# Email: gentaman01@gmail.com
+# Edited: 2019-07-16
+# 
+# Created:  2017-05-26 by Kazuto Nakashima
+'''
+MIT License
+
+Copyright (c) 2017 Kazuto Nakashima
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'''
 
 from collections import OrderedDict, Sequence
 
@@ -24,20 +46,33 @@ class _BaseWrapper(object):
         self.device = next(model.parameters()).device
         self.model = model
         self.handlers = []  # a set of hook function handlers
+        self.logits = None
+
+    def remove(self):
+        self.remove_hook()
+        del self.device
+        del self.model
+        del self.logits
+        torch.cuda.empty_cache()
 
     def _encode_one_hot(self, ids):
         one_hot = torch.zeros_like(self.logits).to(self.device)
         one_hot.scatter_(1, ids, 1.0)
         return one_hot
 
-    def forward(self, image):
+    def forward(self, image, layers=None):
         """
         Simple classification
         """
         self.model.zero_grad()
-        self.logits = self.model(image)
-        self.probs = F.softmax(self.logits, dim=1)
-        return self.probs.sort(dim=1, descending=True)
+        if layers is None:
+            self.logits = self.model(image)
+            self.probs = F.softmax(self.logits, dim=1)
+            result = self.probs.sort(dim=1, descending=True)
+        else:
+            self.logits = self.model(image, layers)
+            result = self.logits
+        return result
 
     def backward(self, ids):
         """
@@ -63,14 +98,19 @@ class _BaseWrapper(object):
 
 
 class BackPropagation(_BaseWrapper):
-    def forward(self, image):
+    # def __del__(self):
+    #     del self.image
+    #     super(BackPropagation, self).__del__()
+
+    def forward(self, image, layers=None):
         self.image = image.requires_grad_()
-        return super(BackPropagation, self).forward(self.image)
+        return super(BackPropagation, self).forward(self.image, layers=layers)
 
     def generate(self):
         gradient = self.image.grad.clone()
         self.image.grad.zero_()
         return gradient
+
 
 
 class GuidedBackPropagation(BackPropagation):
@@ -90,7 +130,6 @@ class GuidedBackPropagation(BackPropagation):
 
         for module in self.model.named_modules():
             self.handlers.append(module[1].register_backward_hook(backward_hook))
-
 
 class Deconvnet(BackPropagation):
     """
@@ -127,7 +166,11 @@ class GradCAM(_BaseWrapper):
         def forward_hook(key):
             def forward_hook_(module, input, output):
                 # Save featuremaps
-                self.fmap_pool[key] = output.detach()
+                if isinstance(output, dict):
+                    ls = input[1]
+                    self.fmap_pool[key] = output[ls[0]].detach()
+                else:
+                    self.fmap_pool[key] = output.detach()
 
             return forward_hook_
 
@@ -144,6 +187,13 @@ class GradCAM(_BaseWrapper):
                 self.handlers.append(module.register_forward_hook(forward_hook(name)))
                 self.handlers.append(module.register_backward_hook(backward_hook(name)))
 
+    def remove(self):
+        del self.fmap_pool
+        del self.grad_pool
+        del self.candidate_layers
+        super(GradCAM, self).remove()
+
+
     def _find(self, pool, target_layer):
         if target_layer in pool.keys():
             return pool[target_layer]
@@ -153,9 +203,9 @@ class GradCAM(_BaseWrapper):
     def _compute_grad_weights(self, grads):
         return F.adaptive_avg_pool2d(grads, 1)
 
-    def forward(self, image):
+    def forward(self, image, layers=None):
         self.image_shape = image.shape[2:]
-        return super(GradCAM, self).forward(image)
+        return super(GradCAM, self).forward(image, layers)
 
     def generate(self, target_layer):
         fmaps = self._find(self.fmap_pool, target_layer)
