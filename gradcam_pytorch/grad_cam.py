@@ -157,27 +157,42 @@ class GradCAM(_BaseWrapper):
     Look at Figure 2 on page 4
     """
 
-    def __init__(self, model, candidate_layers=None):
+    def __init__(self, model, candidate_layers=None, replace=True):
         super(GradCAM, self).__init__(model)
         self.fmap_pool = OrderedDict()
         self.grad_pool = OrderedDict()
         self.candidate_layers = candidate_layers  # list
+        self.replace = replace
 
         def forward_hook(key):
             def forward_hook_(module, input, output):
                 # Save featuremaps
                 if isinstance(output, dict):
                     ls = input[1]
-                    self.fmap_pool[key] = output[ls[0]].detach()
+                    out = output[ls[0]].detach()
                 else:
-                    self.fmap_pool[key] = output.detach()
+                    out = output.detach()
+                
+                if self.replace or key not in self.fmap_pool:
+                    self.fmap_pool[key] = out
+                else:
+                    tmp_key = key
+                    while(tmp_key in self.fmap_pool):
+                        tmp_key = tmp_key + '_r'
+                    self.fmap_pool[tmp_key] = out
 
             return forward_hook_
 
         def backward_hook(key):
             def backward_hook_(module, grad_in, grad_out):
                 # Save the gradients correspond to the featuremaps
-                self.grad_pool[key] = grad_out[0].detach()
+                if self.replace or key not in self.grad_pool:
+                    self.grad_pool[key] = grad_out[0].detach()
+                else:
+                    tmp_key = key
+                    while(tmp_key in self.grad_pool):
+                        tmp_key = tmp_key + '_r'
+                    self.grad_pool[tmp_key] = grad_out[0].detach()
 
             return backward_hook_
 
