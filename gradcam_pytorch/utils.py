@@ -36,11 +36,12 @@ class StackValueWrapper:
             hook_name from [forward_out, backward_out, forward_in, backward_in]
             If any candidates are not specified, the hook is registered to all the layers.
         '''
-        super(StackValueWrapper, self).__init__(model)
+        self.model = model
         self.pool = OrderedDict()
         self.candidate_layers = candidate_layers  # list
         self.replace = replace
         self.hook_name = hook_name
+        self.handlers = []
 
         def forward_hook(key):
             def forward_hook_(module, input, output):
@@ -64,7 +65,7 @@ class StackValueWrapper:
         def forward_in_hook(key):
             def forward_hook_(module, input, output):
                 # Save featuremaps
-                out = [i.detach(), for i in input]
+                out = [i.detach() for i in input]
                 
                 if self.replace or key not in self.pool:
                     self.pool[key] = out
@@ -92,7 +93,7 @@ class StackValueWrapper:
         def backward_in_hook(key):
             def backward_hook_(module, grad_in, grad_out):
                 # Save featuremaps
-                out = grad_in[0].detach()
+                out = [i.detach() for i in filter(lambda x: x is not None, grad_in)]
                 
                 if self.replace or key not in self.pool:
                     self.pool[key] = out
@@ -117,8 +118,11 @@ class StackValueWrapper:
 
         for name, module in self.model.named_modules():
             if self.candidate_layers is None or name in self.candidate_layers:
-                self.handlers.append(module.register_forward_hook(hook(name)))
-
+                if 'forward' in hook_name:
+                    self.handlers.append(module.register_forward_hook(hook(name)))
+                if 'backward' in hook_name:
+                    self.handlers.append(module.register_backward_hook(hook(name)))
+                
     def remove(self):
         del self.pool
         self.pool = OrderedDict()
